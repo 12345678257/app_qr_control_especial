@@ -1,11 +1,13 @@
-# Capturador QR → Excel (Tabulado) — v2
+# QR Generator (Streamlit) — v3.3
 
-Convierte cada escaneo de QR en **una fila** de Excel, con **todas las columnas** ya separadas.
+Genera **códigos QR** con la información del medicamento. Incluye:
+- Modos: *Mini página (tabla)*, *Texto legible*, *JSON*, *URL*.
+- Fallback automático para evitar QRs demasiado densos.
+- Modo por lotes desde CSV (descarga ZIP con PNGs).
 
-## Ejecutar (Windows)
+## Ejecutar
 ```bash
-pip install openpyxl
-python capturador_qr_excel_v2.py
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\python -m streamlit run app_qr_medicamentos_v3_3.py
 ```
-- Lector en modo **HID/teclado** y sufijo **ENTER/CR**.
-- Salida: `scans_qr_tabulado.xlsx` (+ `.csv` opcional).
