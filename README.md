@@ -1,1 +1,1 @@
-# Capturador QR → Excel — v2.1 (CSV robusto ';')
+# QR Generator (Streamlit) — v3.3 FIX2
