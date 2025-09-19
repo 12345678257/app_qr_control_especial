@@ -157,33 +157,41 @@ tpl=",".join(tpl_cols)+"\n"+"CLONAZEPAM,2 mg,Tableta,Blíster x10,Psicotrópico,
 st.download_button("📄 Plantilla CSV", data=tpl.encode("utf-8"),
                    file_name="plantilla_medicamentos_qr.csv", mime="text/csv")
 
-uploaded=st.file_uploader("Sube el CSV de la plantilla", type=["csv"])
-modo_batch=st.radio("Contenido (lote)", ["Texto legible", "JSON estructurado"], index=0, horizontal=True)
+uploaded = st.file_uploader("Sube el CSV de la plantilla", type=["csv"])
+modo_batch = st.radio("Contenido (lote)", ["Texto legible", "JSON estructurado"], index=0, horizontal=True)
+
+# Reusar el logo también en lote (si fue subido arriba)
+logo_img_batch = None
+if logo_file is not None:
+    try:
+        logo_img_batch = Image.open(logo_file).convert("RGBA")
+    except Exception:
+        logo_img_batch = None
 
 if uploaded is not None:
-    try: text=uploaded.getvalue().decode("utf-8-sig")
-    except: text=uploaded.getvalue().decode("latin-1")
-    reader=csv.DictReader(text.splitlines())
-    missing=[c for c in tpl_cols if c not in reader.fieldnames]
-    if missing:
-        st.error("❌ Faltan columnas: "+", ".join(missing))
-    else:
-        rows=list(reader); st.success(f"✅ {len(rows)} filas"); st.table(rows[:5])
-        if st.button("🔲 Generar ZIP con QRs", type="primary"):
-            import zipfile, io as _io
-            buf=_io.BytesIO()
-            with zipfile.ZipFile(buf,"w",zipfile.ZIP_DEFLATED) as z:
-                for i,r in enumerate(rows):
-                    row={k:(r.get(k,'') or '') for k in tpl_cols}
-                    payload=build_payload(row, modo_batch)
-                    img=make_qr(payload, ecc="Q", color=control_color(row.get('control','')),
-                                size=384, border=4)   # tamaño estándar en lote
-                    # Si quieres aplicar logo también en lote, descomenta:
-                    # if logo_file:
-                    #     logo_img = Image.open(logo_file)
-                    #     img = center_logo(img, logo_img, scale=logo_scale/100.0)
-                    bio=_io.BytesIO(); img.save(bio,"PNG")
-                    name=f"{i+1:03d}_{row.get('nombre_generico','med').strip().replace(' ','_')}_{row.get('lote','').strip()}.png"
-                    z.writestr(name, bio.getvalue())
-            st.download_button("⬇️ Descargar ZIP", data=buf.getvalue(),
-                               file_name="qrs_lote.zip", mime="application/zip")
+    ...
+    if st.button("🔲 Generar ZIP con QRs", type="primary"):
+        import zipfile, io as _io
+        buf = _io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for i, r in enumerate(rows):
+                row = {k: (r.get(k, '') or '') for k in tpl_cols}
+                payload = build_payload(row, modo_batch)
+
+                # ECC alto si hay logo
+                ecc_for_batch = "H" if logo_img_batch else "Q"
+                img = make_qr(payload,
+                              ecc=ecc_for_batch,
+                              color=control_color(row.get('control','')),
+                              size=qr_size,               # usa el mismo tamaño del slider
+                              border=border)              # usa el mismo quiet zone
+
+                if logo_img_batch:
+                    img = center_logo(img, logo_img_batch, scale=logo_scale/100.0)
+
+                bio = _io.BytesIO(); img.save(bio, "PNG")
+                name = f"{i+1:03d}_{row.get('nombre_generico','med').strip().replace(' ','_')}_{row.get('lote','').strip()}.png"
+                z.writestr(name, bio.getvalue())
+
+        st.download_button("⬇️ Descargar ZIP", data=buf.getvalue(),
+                           file_name="qrs_lote.zip", mime="application/zip")
