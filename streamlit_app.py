@@ -11,7 +11,7 @@ except Exception:
     pd = None
 
 st.set_page_config(page_title="QR Medicamentos", page_icon="🔲", layout="centered")
-st.title("🔲 Generador de QR (Medicamentos) — By Luis Cordoba Garcia")
+st.title("🔲 Generador de QR (Medicamentos)")
 
 # ========== Constantes (campos base para construir el payload) ==========
 HEAD_IN = [
