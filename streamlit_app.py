@@ -13,17 +13,13 @@ except Exception:
 st.set_page_config(page_title="QR Medicamentos", page_icon="🔲", layout="centered")
 st.title("🔲 Generador de QR (Medicamentos) — By Luis Cordoba Garcia")
 
-# ========== Constantes de columnas ==========
+# ========== Constantes (campos base para construir el payload) ==========
 HEAD_IN = [
     "Codigo del medicamento","nombre_generico","concentracion","forma_farmaceutica","presentacion",
     "registro_sanitario","lote","fecha_vencimiento","fabricante","id_hospital","conservacion",
     "advertencias","normativa"
 ]
-HEAD_OUT = [
-    "timestamp","Codigo del medicamento","nombre_generico","concentracion","forma_farmaceutica",
-    "presentacion","registro_sanitario","lote","fecha_vencimiento","fabricante","id_hospital",
-    "conservacion","advertencias","normativa","url_qr","raw"
-]
+# Nota: el orden final del archivo de salida ahora se toma de la plantilla del usuario.
 
 # ========== Utilidades de QR ==========
 def make_qr(data, ecc="Q", color="black", size=512, border=4):
@@ -63,7 +59,7 @@ def center_logo(qr_img: Image.Image, logo_img: Image.Image,
     out.alpha_composite(logo, (cx + pad, cy + pad))
     return out.convert("RGB")
 
-def control_color(_):  # color decorativo (no tenemos 'control' en el nuevo cabezote)
+def control_color(_):
     return "#00a859"
 
 def build_payload(row: dict, modo: str) -> str:
@@ -113,13 +109,13 @@ def public_qr_url(payload: str, size: int = 384, ecc: str = "Q") -> str:
         f"&size={size}"
     )
 
-# ========== Lectura de plantilla (CSV/XLSX) ==========
+# ========== Lectura de plantilla (CSV/XLSX) conservando CABEZOTE del usuario ==========
 def read_table(uploaded_file):
     """
-    Devuelve (rows_in:list[dict], delimiter:str|None)
+    Devuelve (records_original:list[dict], delimiter:str|None, input_headers:list[str])
     - CSV: autodetecta delimitador (',' o ';')
     - XLSX: usa pandas, sin delimitador
-    Mapea a HEAD_IN si el archivo venía con HEAD_OUT.
+    No reordena ni cambia los nombres de columnas; preserva el cabezote del usuario.
     """
     # XLSX
     if uploaded_file.name.lower().endswith((".xlsx", ".xls")):
@@ -132,17 +128,7 @@ def read_table(uploaded_file):
             st.error(f"❌ No se pudo leer el Excel: {e}")
             st.stop()
         fieldnames = [str(c).strip() for c in df.columns]
-        records = df.to_dict(orient="records")
-        # Si viene con HEAD_OUT, lo convertimos a HEAD_IN
-        if set(HEAD_OUT).issubset(set(fieldnames)) or ("url_qr" in fieldnames and "raw" in fieldnames):
-            rows_in = [{k: r.get(k, "") for k in HEAD_IN} for r in records]
-        else:
-            missing = [c for c in HEAD_IN if c not in fieldnames]
-            if missing:
-                st.error("❌ Faltan columnas: " + ", ".join(missing))
-                st.stop()
-            rows_in = records
-        return rows_in, None
+        return df.to_dict(orient="records"), None, fieldnames
 
     # CSV
     raw = uploaded_file.getvalue()
@@ -154,15 +140,7 @@ def read_table(uploaded_file):
     delim = ";" if first_line.count(";") >= first_line.count(",") else ","
     reader = csv.DictReader(io.StringIO(text), delimiter=delim)
     fieldnames = [f.strip() for f in (reader.fieldnames or [])]
-    if set(HEAD_OUT).issubset(set(fieldnames)) or ("url_qr" in fieldnames and "raw" in fieldnames):
-        rows_in = [{k: r.get(k, "") for k in HEAD_IN} for r in reader]
-    else:
-        missing = [c for c in HEAD_IN if c not in fieldnames]
-        if missing:
-            st.error("❌ Faltan columnas: " + ", ".join(missing))
-            st.stop()
-        rows_in = list(reader)
-    return rows_in, delim
+    return list(reader), delim, fieldnames
 
 # ========== Individual ==========
 with st.expander("🧩 Generar QR individual", expanded=True):
@@ -229,29 +207,28 @@ with st.expander("🧩 Generar QR individual", expanded=True):
         st.download_button("⬇️ Descargar PNG", data=bio.getvalue(),
                            file_name=f"qr_{nombre}_{lote}.png", mime="image/png")
 
-# ========== Plantilla (CSV/XLSX) ==========
+# ========== Plantilla de ejemplo (opcional) ==========
 st.divider(); st.subheader("📄 Plantilla de ejemplo (nuevo cabezote)")
-tpl_df = pd.DataFrame([{
-    "timestamp": datetime.datetime.now().strftime("%d/%m/%Y %H:%M"),
-    "Codigo del medicamento": "ABC-001",
-    "nombre_generico": "CLONAZEPAM",
-    "concentracion": "2 mg",
-    "forma_farmaceutica": "Tableta",
-    "presentacion": "Blíster x10",
-    "registro_sanitario": "INVIMA 2019M-000000-R1",
-    "lote": "ABC123",
-    "fecha_vencimiento": "12/2025",
-    "fabricante": "Laboratorio XYZ S.A.",
-    "id_hospital": "Hospital ABC",
-    "conservacion": "Conservar <25°C",
-    "advertencias": "Venta bajo fórmula médica",
-    "normativa": "Res 1478/2006 - Circ 01/2016 FNE",
-    "url_qr": "",
-    "raw": ""
-}]) if pd is not None else None
-
-col_tpl = st.columns(2)
-if pd is not None and tpl_df is not None:
+if pd is not None:
+    tpl_df = pd.DataFrame([{
+        "timestamp": datetime.datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "Codigo del medicamento": "ABC-001",
+        "nombre_generico": "CLONAZEPAM",
+        "concentracion": "2 mg",
+        "forma_farmaceutica": "Tableta",
+        "presentacion": "Blíster x10",
+        "registro_sanitario": "INVIMA 2019M-000000-R1",
+        "lote": "ABC123",
+        "fecha_vencimiento": "12/2025",
+        "fabricante": "Laboratorio XYZ S.A.",
+        "id_hospital": "Hospital ABC",
+        "conservacion": "Conservar <25°C",
+        "advertencias": "Venta bajo fórmula médica",
+        "normativa": "Res 1478/2006 - Circ 01/2016 FNE",
+        "url_qr": "",
+        "raw": ""
+    }])
+    col_tpl = st.columns(2)
     # CSV
     csv_buf = io.StringIO(newline="")
     tpl_df.to_csv(csv_buf, index=False)
@@ -265,10 +242,9 @@ if pd is not None and tpl_df is not None:
                                file_name="plantilla_medicamentos_qr_nuevo.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ========== Lote (CSV/XLSX) ==========
+# ========== Lote (CSV/XLSX) — salida horizontal con el mismo orden de tu plantilla ==========
 st.divider(); st.subheader("📦 Generación masiva (CSV o XLSX)")
-uploaded = st.file_uploader("Sube la plantilla CSV/XLSX (nuevo cabezote o solo los campos de entrada)",
-                            type=["csv","xlsx","xls"])
+uploaded = st.file_uploader("Sube la plantilla CSV/XLSX (usamos exactamente tu orden de columnas)", type=["csv","xlsx","xls"])
 modo_batch = st.radio("Contenido del QR (lote)", ["Texto legible", "JSON estructurado"], index=0, horizontal=True)
 
 # Reutilizar logo del individual
@@ -280,9 +256,20 @@ if 'logo_file' in locals() and logo_file is not None:
         logo_img_batch = None
 
 if uploaded is not None:
-    rows_in, delim_in = read_table(uploaded)
-    st.success(f"✅ {len(rows_in)} filas detectadas")
-    st.dataframe(rows_in[:10])
+    records, delim_in, input_headers = read_table(uploaded)
+    st.success(f"✅ {len(records)} filas detectadas")
+    st.dataframe(records[:10])
+
+    # Determinar encabezado de salida: el MISMO orden de la plantilla
+    out_headers = list(input_headers)  # copia
+    # Si no está timestamp, lo insertamos al inicio
+    if "timestamp" not in out_headers:
+        out_headers.insert(0, "timestamp")
+    # Asegurar url_qr y raw al final (en ese orden)
+    for extra in ["url_qr", "raw"]:
+        if extra in out_headers:
+            out_headers.remove(extra)
+        out_headers.append(extra)
 
     # Selector delimitador para CSV de salida
     delim_out = st.selectbox("Delimitador para CSV de salida",
@@ -295,65 +282,61 @@ if uploaded is not None:
     else:
         delim_used = ";"
 
-    if st.button("🔲 Generar ZIP de PNGs + CSV/XLSX con URLs", type="primary"):
+    if st.button("🔲 Generar ZIP de PNGs + CSV/XLSX con URLs (orden = tu plantilla)", type="primary"):
         import zipfile
         zip_buf = io.BytesIO()
         out_rows = []
 
         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for i, r in enumerate(rows_in):
-                row = {k: (r.get(k, "") or "") for k in HEAD_IN}
-                payload = build_payload(row, modo_batch)
+            for i, r in enumerate(records):
+                # Para construir el payload necesitamos estos campos base:
+                base_row = {k: (r.get(k, "") or "") for k in HEAD_IN}
+                payload = build_payload(base_row, modo_batch)
                 ecc_for_batch = "H" if logo_img_batch else "Q"
                 url_publica = public_qr_url(payload, size=384, ecc=ecc_for_batch)
 
+                # PNG (con o sin logo)
                 img = make_qr(payload, ecc=ecc_for_batch, color=control_color(None),
                               size=384, border=4)
                 if logo_img_batch:
                     img = center_logo(img, logo_img_batch, scale=0.20)
                 png = io.BytesIO(); img.save(png, "PNG")
 
-                base = f"{i+1:03d}_{row.get('nombre_generico','med').strip().replace(' ','_')}_{row.get('lote','').strip()}"
-                z.writestr(base + ".png", png.getvalue())
+                base_name = f"{i+1:03d}_{base_row.get('nombre_generico','med').strip().replace(' ','_')}_{base_row.get('lote','').strip()}"
+                z.writestr(base_name + ".png", png.getvalue())
 
-                out_rows.append({
-                    "timestamp": datetime.datetime.now().strftime("%d/%m/%Y %H:%M"),
-                    "Codigo del medicamento": row.get("Codigo del medicamento",""),
-                    "nombre_generico": row.get("nombre_generico",""),
-                    "concentracion": row.get("concentracion",""),
-                    "forma_farmaceutica": row.get("forma_farmaceutica",""),
-                    "presentacion": row.get("presentacion",""),
-                    "registro_sanitario": row.get("registro_sanitario",""),
-                    "lote": row.get("lote",""),
-                    "fecha_vencimiento": row.get("fecha_vencimiento",""),
-                    "fabricante": row.get("fabricante",""),
-                    "id_hospital": row.get("id_hospital",""),
-                    "conservacion": row.get("conservacion",""),
-                    "advertencias": row.get("advertencias",""),
-                    "normativa": row.get("normativa","Res 1478/2006 - Circ 01/2016 FNE"),
-                    "url_qr": url_publica,
-                    "raw": payload
-                })
+                # Fila de salida: partimos de las columnas del usuario en su mismo orden
+                out = {k: (r.get(k, "") or "") for k in input_headers}
+                out["timestamp"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+                out["url_qr"] = url_publica
+                out["raw"] = payload
+                out_rows.append(out)
 
-        # CSV salida
+        # CSV salida con el MISMO orden de la plantilla
         csv_out_buf = io.StringIO(newline="")
-        w = csv.DictWriter(csv_out_buf, fieldnames=HEAD_OUT, delimiter=delim_used, quoting=csv.QUOTE_MINIMAL)
-        w.writeheader(); w.writerows(out_rows)
+        w = csv.DictWriter(csv_out_buf, fieldnames=out_headers, delimiter=delim_used, quoting=csv.QUOTE_MINIMAL)
+        w.writeheader()
+        for row in out_rows:
+            # Asegurar todas las llaves presentes (vacías si faltan)
+            w.writerow({k: row.get(k, "") for k in out_headers})
 
-        # XLSX salida
-        xlsx_out_buf = io.BytesIO()
+        # XLSX salida con el MISMO orden
+        xlsx_bytes = b""
         if pd is not None:
-            pd.DataFrame(out_rows)[HEAD_OUT].to_excel(xlsx_out_buf, index=False, sheet_name="salida")
-            xlsx_bytes = xlsx_out_buf.getvalue()
-        else:
-            xlsx_bytes = b""
+            df_out = pd.DataFrame([{k: r.get(k, "") for k in out_headers} for r in out_rows])
+            xlsx_out = io.BytesIO()
+            with pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
+                df_out.to_excel(writer, index=False, sheet_name="salida")
+            xlsx_bytes = xlsx_out.getvalue()
 
         st.download_button("⬇️ Descargar ZIP de PNGs", data=zip_buf.getvalue(),
                            file_name="qrs_lote.zip", mime="application/zip")
-        st.download_button("⬇️ Descargar CSV con URLs", data=csv_out_buf.getvalue().encode("utf-8"),
+        st.download_button("⬇️ Descargar CSV con URLs (orden = tu plantilla)",
+                           data=csv_out_buf.getvalue().encode("utf-8"),
                            file_name="salida_con_urls.csv", mime="text/csv")
         if xlsx_bytes:
-            st.download_button("⬇️ Descargar XLSX con URLs", data=xlsx_bytes,
+            st.download_button("⬇️ Descargar XLSX con URLs (orden = tu plantilla)",
+                               data=xlsx_bytes,
                                file_name="salida_con_urls.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
