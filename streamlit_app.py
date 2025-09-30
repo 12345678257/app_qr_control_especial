@@ -10,7 +10,7 @@ except Exception:
     pd = None
 
 st.set_page_config(page_title="QR Medicamentos", page_icon="🔲", layout="centered")
-st.title("🔲 Generador de QR (Medicamentos) — 1.5\" físico")
+st.title("🔲 Generador de QR (Medicamentos) — 1.5\" físico (DPI embebido)")
 
 HEAD_IN = [
     "Codigo del medicamento","nombre_generico","concentracion","forma_farmaceutica","presentacion",
@@ -39,16 +39,8 @@ def center_logo(qr_img: Image.Image, logo_img: Image.Image,
     out.alpha_composite(logo, (cx + pad, cy + pad))
     return out.convert("RGB")
 
-def make_qr_physical(
-    data: str,
-    inches: float = 1.5,
-    dpi: int = 300,
-    ecc: str = "Q",
-    color: str = "black",
-    border: int = 4,
-    logo_img: Image.Image | None = None,
-    logo_scale: float = 0.20
-):
+def make_qr_physical(data: str, inches: float, dpi: int, ecc: str, color: str, border: int,
+                     logo_img=None, logo_scale: float = 0.20):
     import qrcode.constants as C
     ecc_map = {"L": C.ERROR_CORRECT_L, "M": C.ERROR_CORRECT_M,
                "Q": C.ERROR_CORRECT_Q, "H": C.ERROR_CORRECT_H}
@@ -56,48 +48,34 @@ def make_qr_physical(
     target_px = int(round(inches * dpi))
     qr_tmp = qrcode.QRCode(version=None, box_size=1, border=border,
                            error_correction=ecc_map.get(ecc, C.ERROR_CORRECT_Q))
-    qr_tmp.add_data(data)
-    qr_tmp.make(fit=True)
+    qr_tmp.add_data(data); qr_tmp.make(fit=True)
     modules = qr_tmp.modules_count
     total_modules = modules + 2 * border
-
     box_size = max(1, target_px // total_modules)
     actual_px = total_modules * box_size
 
     qr = qrcode.QRCode(version=None, box_size=box_size, border=border,
                        error_correction=ecc_map.get(ecc, C.ERROR_CORRECT_Q))
-    qr.add_data(data)
-    qr.make(fit=True)
+    qr.add_data(data); qr.make(fit=True)
     img = qr.make_image(fill_color=color, back_color="white").convert("RGB")
 
     if actual_px < target_px:
         pad = (target_px - actual_px) // 2
         canvas = Image.new("RGB", (target_px, target_px), "white")
-        canvas.paste(img, (pad, pad))
-        img = canvas
-        actual_px = target_px
+        canvas.paste(img, (pad, pad)); img = canvas; actual_px = target_px
 
     if logo_img is not None:
         img = center_logo(img, logo_img, scale=logo_scale)
 
     mm_per_pixel = 25.4 / dpi
-    module_size_mm = box_size * mm_per_pixel
-
     info = {
-        "dpi": dpi,
-        "inches": inches,
-        "target_px": target_px,
-        "actual_px": actual_px,
-        "modules": modules,
-        "border_modules": border,
-        "box_size_px": box_size,
-        "module_size_mm": round(module_size_mm, 3),
-        "ecc": ecc,
+        "dpi": dpi, "inches": inches, "target_px": target_px, "actual_px": actual_px,
+        "modules": modules, "border_modules": border, "box_size_px": box_size,
+        "module_size_mm": round(box_size * mm_per_pixel, 3), "ecc": ecc
     }
     return img, info
 
-def control_color(_):
-    return "#00a859"
+def control_color(_): return "#00a859"
 
 def build_payload(row: dict, modo: str) -> str:
     if modo == "JSON estructurado":
@@ -110,10 +88,7 @@ def build_payload(row: dict, modo: str) -> str:
                 "presentacion": row.get("presentacion",""),
                 "registro_sanitario": row.get("registro_sanitario","")
             },
-            "lote": {
-                "codigo": row.get("lote",""),
-                "fecha_vencimiento": row.get("fecha_vencimiento","")
-            },
+            "lote": {"codigo": row.get("lote",""), "fecha_vencimiento": row.get("fecha_vencimiento","")},
             "fabricante": row.get("fabricante",""),
             "entidad": {"id": row.get("id_hospital","")},
             "conservacion": row.get("conservacion",""),
@@ -136,51 +111,40 @@ def build_payload(row: dict, modo: str) -> str:
             f"NORMATIVA: {row.get('normativa','Res 1478/2006 - Circ 01/2016 FNE')}"
         )
 
-def public_qr_url(payload: str, size: int = 384, ecc: str = "Q") -> str:
+def public_qr_url(payload: str, size: int, ecc: str) -> str:
     return "https://quickchart.io/qr?text=" + urlp.quote(payload, safe="") + f"&ecLevel={ecc}&size={size}"
 
 def read_table(uploaded_file):
-    if uploaded_file.name.lower().endswith((".xlsx", ".xls")):
+    if uploaded_file.name.lower().endswith((".xlsx",".xls")):
         if pd is None:
-            st.error("❌ Falta pandas para leer Excel. Instala: `pip install pandas openpyxl`")
-            st.stop()
+            st.error("❌ Falta pandas para leer Excel. Instala: `pip install pandas openpyxl`"); st.stop()
         try:
             df = pd.read_excel(uploaded_file, dtype=str).fillna("")
         except Exception as e:
-            st.error(f"❌ No se pudo leer el Excel: {e}")
-            st.stop()
-        fieldnames = [str(c).strip() for c in df.columns]
-        return df.to_dict(orient="records"), None, fieldnames
-
+            st.error(f"❌ No se pudo leer el Excel: {e}"); st.stop()
+        return df.to_dict(orient="records"), None, [str(c).strip() for c in df.columns]
     raw = uploaded_file.getvalue()
-    try:
-        text = raw.decode("utf-8-sig")
-    except Exception:
-        text = raw.decode("latin-1")
-    first_line = text.splitlines()[0] if text else ""
-    delim = ";" if first_line.count(";") >= first_line.count(",") else ","
+    try: text = raw.decode("utf-8-sig")
+    except Exception: text = raw.decode("latin-1")
+    first = text.splitlines()[0] if text else ""
+    delim = ";" if first.count(";") >= first.count(",") else ","
     reader = csv.DictReader(io.StringIO(text), delimiter=delim)
-    fieldnames = [f.strip() for f in (reader.fieldnames or [])]
-    return list(reader), delim, fieldnames
+    return list(reader), delim, [f.strip() for f in (reader.fieldnames or [])]
 
+# ---------------- Individual ----------------
 with st.expander("🧩 Generar QR individual", expanded=True):
     modo = st.radio("Contenido del QR", ["Texto legible", "JSON estructurado"], index=0, horizontal=True)
 
-    col_size = st.columns(3)
-    with col_size[0]:
-        inches = st.number_input("Tamaño físico (pulgadas)", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
-    with col_size[1]:
-        dpi = st.selectbox("DPI de impresión", [203, 300, 600], index=1)
-    with col_size[2]:
-        border = st.slider("Borde (quiet zone) [módulos]", 2, 10, 4, 1)
+    c1,c2,c3 = st.columns(3)
+    with c1: inches = st.number_input("Tamaño físico (pulgadas)", 1.0, 3.0, 1.5, 0.1)
+    with c2: dpi = st.selectbox("DPI", [203,300,600], index=1)
+    with c3: border = st.slider("Borde (quiet zone)", 2, 10, 4, 1)
 
-    col_logo = st.columns(2)
-    with col_logo[0]:
-        logo_scale = st.slider("Logo centrado (% del lado)", 8, 30, 20, 1)
-    with col_logo[1]:
-        logo_file = st.file_uploader("Logo (PNG/JPG/WebP)", type=["png","jpg","jpeg","webp"])
+    l1,l2 = st.columns(2)
+    with l1: logo_scale = st.slider("Logo (% del lado)", 8, 30, 20, 1)
+    with l2: logo_file = st.file_uploader("Logo (PNG/JPG/WebP opcional)", type=["png","jpg","jpeg","webp"])
 
-    col1, col2 = st.columns(2)
+    col1,col2 = st.columns(2)
     with col1:
         codigo = st.text_input("Codigo del medicamento", "ABC-001")
         nombre = st.text_input("Nombre genérico*", "CLONAZEPAM")
@@ -193,56 +157,26 @@ with st.expander("🧩 Generar QR individual", expanded=True):
         ven    = st.text_input("Fecha vencimiento (MM/AAAA)*", "12/2025")
         fabricante = st.text_input("Fabricante*", "Laboratorio XYZ S.A.")
         entidad    = st.text_input("Entidad/Hospital", "Hospital ABC")
-        cons = st.text_area("Conservación","Conservar a temperatura ambiente (<25°C), protegido de la luz y humedad.", height=80)
-        adv  = st.text_area("Advertencias","Venta bajo fórmula médica. Manténgase fuera del alcance de los niños.", height=80)
+        cons = st.text_area("Conservación","Conservar a temperatura ambiente (<25°C)", height=80)
+        adv  = st.text_area("Advertencias","Venta bajo fórmula médica.", height=80)
     normativa = st.text_input("Normativa", "Res 1478/2006 - Circ 01/2016 FNE")
 
     if st.button("🔲 Generar QR individual", type="primary"):
-        row = {
-            "Codigo del medicamento": codigo,
-            "nombre_generico": nombre,
-            "concentracion": conc,
-            "forma_farmaceutica": forma,
-            "presentacion": present,
-            "registro_sanitario": reg,
-            "lote": lote,
-            "fecha_vencimiento": ven,
-            "fabricante": fabricante,
-            "id_hospital": entidad,
-            "conservacion": cons,
-            "advertencias": adv,
-            "normativa": normativa
-        }
+        row = {"Codigo del medicamento":codigo,"nombre_generico":nombre,"concentracion":conc,
+               "forma_farmaceutica":forma,"presentacion":present,"registro_sanitario":reg,
+               "lote":lote,"fecha_vencimiento":ven,"fabricante":fabricante,"id_hospital":entidad,
+               "conservacion":cons,"advertencias":adv,"normativa":normativa}
         payload = build_payload(row, modo)
         ecc_level = "H" if logo_file else "Q"
         logo_img = Image.open(logo_file).convert("RGBA") if logo_file else None
-
-        img, info = make_qr_physical(
-            data=payload,
-            inches=inches,
-            dpi=dpi,
-            ecc=ecc_level,
-            color=control_color(None),
-            border=border,
-            logo_img=logo_img,
-            logo_scale=logo_scale/100.0
-        )
-
-        st.image(img, caption=f"QR {inches}\" @ {dpi}dpi • ECC {ecc_level}", use_container_width=True)
-
-        if info["module_size_mm"] < 0.33:
-            st.warning(f"El tamaño de módulo es {info['module_size_mm']} mm (< 0.33 mm). "
-                       "Para mejor lectura: reduce contenido, sube DPI o usa tamaño físico mayor.")
-        else:
-            st.info(f"Módulo ≈ {info['module_size_mm']} mm, módulos {info['modules']} + borde {border}")
-
+        img, info = make_qr_physical(payload, inches, dpi, ecc_level, control_color(None), border, logo_img, logo_scale/100.0)
+        st.image(img, caption=f"{int(info['actual_px'])}x{int(info['actual_px'])} px @ {dpi} dpi • ECC {ecc_level}", use_container_width=True)
         url_publica = public_qr_url(payload, size=info["actual_px"], ecc=ecc_level)
         st.text_input("URL pública del QR", value=url_publica)
+        bio = io.BytesIO(); img.save(bio, "PNG", dpi=(dpi,dpi))  # <-- DPI embebido
+        st.download_button("⬇️ Descargar PNG (DPI embebido)", data=bio.getvalue(), file_name=f"qr_{nombre}_{lote}.png", mime="image/png")
 
-        bio = io.BytesIO(); img.save(bio, "PNG")
-        st.download_button("⬇️ Descargar PNG", data=bio.getvalue(),
-                           file_name=f"qr_{nombre}_{lote}.png", mime="image/png")
-
+# ---------------- Plantillas ----------------
 st.divider(); st.subheader("📄 Plantillas de ejemplo")
 if pd is not None:
     tpl_df = pd.DataFrame([{
@@ -263,143 +197,89 @@ if pd is not None:
         "url_qr": "",
         "raw": ""
     }])
-    col_tpl = st.columns(2)
-    csv_buf = io.StringIO(newline="")
-    tpl_df.to_csv(csv_buf, index=False)
-    col_tpl[0].download_button("⬇️ Plantilla CSV", data=csv_buf.getvalue().encode("utf-8"),
-                               file_name="plantilla_medicamentos_qr_nuevo.csv", mime="text/csv")
+    ctpl = st.columns(2)
+    csv_buf = io.StringIO(newline=""); tpl_df.to_csv(csv_buf, index=False)
+    ctpl[0].download_button("⬇️ Plantilla CSV", data=csv_buf.getvalue().encode("utf-8"), file_name="plantilla_medicamentos_qr_nuevo.csv", mime="text/csv")
     xlsx_buf = io.BytesIO()
-    with pd.ExcelWriter(xlsx_buf, engine="xlsxwriter") as writer:
-        tpl_df.to_excel(writer, index=False, sheet_name="plantilla")
-    col_tpl[1].download_button("⬇️ Plantilla XLSX", data=xlsx_buf.getvalue(),
-                               file_name="plantilla_medicamentos_qr_nuevo.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with pd.ExcelWriter(xlsx_buf, engine="xlsxwriter") as writer: tpl_df.to_excel(writer, index=False, sheet_name="plantilla")
+    ctpl[1].download_button("⬇️ Plantilla XLSX", data=xlsx_buf.getvalue(), file_name="plantilla_medicamentos_qr_nuevo.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+# ---------------- Lote ----------------
 st.divider(); st.subheader("📦 Generación masiva (CSV o XLSX)")
-uploaded = st.file_uploader("Sube la plantilla CSV/XLSX (usamos exactamente tu orden de columnas)", type=["csv","xlsx","xls"])
+uploaded = st.file_uploader("Sube la plantilla", type=["csv","xlsx","xls"])
 modo_batch = st.radio("Contenido del QR (lote)", ["Texto legible", "JSON estructurado"], index=0, horizontal=True)
 
 st.markdown("### Parámetros de impresión del lote")
-colp = st.columns(3)
-with colp[0]:
-    inches_batch = st.number_input("Tamaño físico (pulgadas) (lote)", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
-with colp[1]:
-    dpi_batch = st.selectbox("DPI (lote)", [203, 300, 600], index=1)
-with colp[2]:
-    border_batch = st.slider("Borde (quiet zone) (lote)", 2, 10, 4, 1)
+cp = st.columns(3)
+with cp[0]: inches_batch = st.number_input("Tamaño físico (pulgadas) (lote)", 1.0, 3.0, 1.5, 0.1)
+with cp[1]: dpi_batch = st.selectbox("DPI (lote)", [203,300,600], index=1)
+with cp[2]: border_batch = st.slider("Borde (quiet zone) (lote)", 2, 10, 4, 1)
 
 logo_img_batch = None
 if 'logo_file' in locals() and logo_file is not None:
-    try:
-        logo_img_batch = Image.open(logo_file).convert("RGBA")
-    except Exception:
-        logo_img_batch = None
+    try: logo_img_batch = Image.open(logo_file).convert("RGBA")
+    except Exception: logo_img_batch = None
 
 def read_table(uploaded_file):
-    if uploaded_file.name.lower().endswith((".xlsx", ".xls")):
+    if uploaded_file.name.lower().endswith((".xlsx",".xls")):
         if pd is None:
-            st.error("❌ Falta pandas para leer Excel. Instala: `pip install pandas openpyxl`")
-            st.stop()
-        try:
-            df = pd.read_excel(uploaded_file, dtype=str).fillna("")
-        except Exception as e:
-            st.error(f"❌ No se pudo leer el Excel: {e}")
-            st.stop()
-        fieldnames = [str(c).strip() for c in df.columns]
-        return df.to_dict(orient="records"), None, fieldnames
-
+            st.error("❌ Falta pandas para leer Excel. Instala: `pip install pandas openpyxl`"); st.stop()
+        try: df = pd.read_excel(uploaded_file, dtype=str).fillna("")
+        except Exception as e: st.error(f"❌ No se pudo leer el Excel: {e}"); st.stop()
+        return df.to_dict(orient="records"), None, [str(c).strip() for c in df.columns]
     raw = uploaded_file.getvalue()
-    try:
-        text = raw.decode("utf-8-sig")
-    except Exception:
-        text = raw.decode("latin-1")
-    first_line = text.splitlines()[0] if text else ""
-    delim = ";" if first_line.count(";") >= first_line.count(",") else ","
+    try: text = raw.decode("utf-8-sig")
+    except Exception: text = raw.decode("latin-1")
+    first = text.splitlines()[0] if text else ""
+    delim = ";" if first.count(";") >= first.count(",") else ","
     reader = csv.DictReader(io.StringIO(text), delimiter=delim)
-    fieldnames = [f.strip() for f in (reader.fieldnames or [])]
-    return list(reader), delim, fieldnames
+    return list(reader), delim, [f.strip() for f in (reader.fieldnames or [])]
 
 if uploaded is not None:
-    records, delim_in, input_headers = read_table(uploaded)
-    st.success(f"✅ {len(records)} filas detectadas")
-    st.dataframe(records[:10])
-
-    out_headers = list(input_headers)
-    if "timestamp" not in out_headers:
-        out_headers.insert(0, "timestamp")
-    for extra in ["url_qr", "raw"]:
-        if extra in out_headers:
-            out_headers.remove(extra)
+    records, delim_in, input_headers = read_table(uploaded); st.success(f"✅ {len(records)} filas"); st.dataframe(records[:10])
+    out_headers = list(input_headers); 
+    if "timestamp" not in out_headers: out_headers.insert(0, "timestamp")
+    for extra in ["url_qr","raw"]:
+        if extra in out_headers: out_headers.remove(extra)
         out_headers.append(extra)
+    delim_out = st.selectbox("Delimitador CSV salida", ["Auto (=entrada)","Coma (,)","Punto y coma (;)"], index=0)
+    delim_used = (delim_in if delim_out=="Auto (=entrada)" and delim_in in (",",";") else ("," if delim_out=="Coma (,)" else ";"))
 
-    delim_out = st.selectbox("Delimitador para CSV de salida",
-                             ["Automático (igual a entrada)", "Coma (,)", "Punto y coma (;)"],
-                             index=0)
-    if delim_out == "Automático (igual a entrada)":
-        delim_used = (delim_in if delim_in in (",",";") else ",")
-    elif delim_out == "Coma (,)":
-        delim_used = ","
-    else:
-        delim_used = ";"
-
-    if st.button("🔲 Generar ZIP de PNGs + CSV/XLSX con URLs (orden = tu plantilla)", type="primary"):
+    if st.button("🔲 Generar ZIP de PNGs + CSV/XLSX con URLs", type="primary"):
         import zipfile
-        zip_buf = io.BytesIO()
-        out_rows = []
-
+        zip_buf = io.BytesIO(); out_rows=[]
         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for i, r in enumerate(records):
-                base_row = {k: (r.get(k, "") or "") for k in HEAD_IN}
+            for i,r in enumerate(records):
+                base_row = {k:(r.get(k,"") or "") for k in HEAD_IN}
                 payload = build_payload(base_row, modo_batch)
-                ecc_for_batch = "H" if logo_img_batch else "Q"
-
-                img, info_qr = make_qr_physical(
-                    data=payload,
-                    inches=inches_batch,
-                    dpi=dpi_batch,
-                    ecc=ecc_for_batch,
-                    color=control_color(None),
-                    border=border_batch,
-                    logo_img=logo_img_batch,
-                    logo_scale=0.20
-                )
-
-                png = io.BytesIO(); img.save(png, "PNG")
-                base_name = f"{i+1:03d}_{base_row.get('nombre_generico','med').strip().replace(' ','_')}_{base_row.get('lote','').strip()}"
-                z.writestr(base_name + ".png", png.getvalue())
-
-                url_publica = public_qr_url(payload, size=info_qr["actual_px"], ecc=ecc_for_batch)
-
-                out = {k: (r.get(k, "") or "") for k in input_headers}
+                ecc_batch = "H" if logo_img_batch else "Q"
+                img, info_qr = make_qr_physical(payload, inches_batch, dpi_batch, ecc_batch, control_color(None), border_batch, logo_img_batch, 0.20)
+                # PNG con DPI embebido
+                bio = io.BytesIO(); img.save(bio, "PNG", dpi=(dpi_batch,dpi_batch))
+                name = f"{i+1:03d}_{base_row.get('nombre_generico','med').strip().replace(' ','_')}_{base_row.get('lote','').strip()}.png"
+                z.writestr(name, bio.getvalue())
+                # URL pública usando los mismos pixeles
+                url_publica = public_qr_url(payload, size=info_qr["actual_px"], ecc=ecc_batch)
+                # Fila salida
+                out = {k:(r.get(k,"") or "") for k in input_headers}
                 out["timestamp"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
                 out["url_qr"] = url_publica
                 out["raw"] = payload
                 out_rows.append(out)
 
-        csv_out_buf = io.StringIO(newline="")
-        w = csv.DictWriter(csv_out_buf, fieldnames=out_headers, delimiter=delim_used, quoting=csv.QUOTE_MINIMAL)
-        w.writeheader()
-        for row in out_rows:
-            w.writerow({k: row.get(k, "") for k in out_headers})
+        csv_out = io.StringIO(newline=""); w = csv.DictWriter(csv_out, fieldnames=out_headers, delimiter=delim_used)
+        w.writeheader(); [w.writerow({k:row.get(k,"") for k in out_headers}) for row in out_rows]
 
-        xlsx_bytes = b""
+        xlsx_bytes=b""
         if pd is not None:
             import pandas as _pd
-            df_out = _pd.DataFrame([{k: r.get(k, "") for k in out_headers} for r in out_rows])
-            xlsx_out = io.BytesIO()
-            with _pd.ExcelWriter(xlsx_out, engine="xlsxwriter") as writer:
+            df_out = _pd.DataFrame([{k:r.get(k,"") for k in out_headers} for r in out_rows])
+            xlsx_io = io.BytesIO()
+            with _pd.ExcelWriter(xlsx_io, engine="xlsxwriter") as writer:
                 df_out.to_excel(writer, index=False, sheet_name="salida")
-            xlsx_bytes = xlsx_out.getvalue()
+            xlsx_bytes = xlsx_io.getvalue()
 
-        st.download_button("⬇️ Descargar ZIP de PNGs", data=zip_buf.getvalue(),
-                           file_name="qrs_lote.zip", mime="application/zip")
-        st.download_button("⬇️ Descargar CSV con URLs (orden = tu plantilla)",
-                           data=csv_out_buf.getvalue().encode("utf-8"),
-                           file_name="salida_con_urls.csv", mime="text/csv")
+        st.download_button("⬇️ Descargar ZIP de PNGs", data=zip_buf.getvalue(), file_name="qrs_lote.zip", mime="application/zip")
+        st.download_button("⬇️ Descargar CSV con URLs (orden plantilla)", data=csv_out.getvalue().encode("utf-8"), file_name="salida_con_urls.csv", mime="text/csv")
         if xlsx_bytes:
-            st.download_button("⬇️ Descargar XLSX con URLs (orden = tu plantilla)",
-                               data=xlsx_bytes,
-                               file_name="salida_con_urls.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        else:
-            st.info("ℹ️ Para XLSX instala `pandas` y `xlsxwriter` en requirements.")
+            st.download_button("⬇️ Descargar XLSX con URLs (orden plantilla)", data=xlsx_bytes, file_name="salida_con_urls.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
