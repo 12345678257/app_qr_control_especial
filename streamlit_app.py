@@ -1,4 +1,12 @@
-# -*- coding: utf-8 -*-
+# Create a repo zip with the updated Streamlit app (physical size QR, CSV/XLSX handling)
+import os, io, zipfile, textwrap, datetime, csv
+
+base_dir = "/mnt/data/app_qr_control_especial_1p5in"
+os.makedirs(base_dir, exist_ok=True)
+os.makedirs(os.path.join(base_dir, "templates"), exist_ok=True)
+
+# ---------------- streamlit_app.py ----------------
+streamlit_app_py = r'''# -*- coding: utf-8 -*-
 import io, json, csv, datetime, urllib.parse as urlp
 import streamlit as st
 import qrcode
@@ -11,7 +19,7 @@ except Exception:
     pd = None
 
 st.set_page_config(page_title="QR Medicamentos", page_icon="🔲", layout="centered")
-st.title("🔲 Generador de QR (Medicamentos)")
+st.title("🔲 Generador de QR (Medicamentos) — 1.5\" físico listo para impresión")
 
 # ========== Constantes (campos base para construir el payload) ==========
 HEAD_IN = [
@@ -22,21 +30,6 @@ HEAD_IN = [
 # Nota: el orden final del archivo de salida ahora se toma de la plantilla del usuario.
 
 # ========== Utilidades de QR ==========
-def make_qr(data, ecc="Q", color="black", size=512, border=4):
-    import qrcode.constants as C
-    ecc_map = {"L": C.ERROR_CORRECT_L, "M": C.ERROR_CORRECT_M,
-               "Q": C.ERROR_CORRECT_Q, "H": C.ERROR_CORRECT_H}
-    qr = qrcode.QRCode(
-        version=None,
-        box_size=max(1, size // 50),
-        border=border,
-        error_correction=ecc_map.get(ecc, C.ERROR_CORRECT_Q),
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color=color, back_color="white").convert("RGB")
-    return img.resize((size, size), Image.Resampling.NEAREST)
-
 def center_logo(qr_img: Image.Image, logo_img: Image.Image,
                 scale: float = 0.20, pad_ratio: float = 0.12, round_ratio: float = 0.25) -> Image.Image:
     """Coloca un logo centrado con marco blanco redondeado."""
@@ -58,6 +51,75 @@ def center_logo(qr_img: Image.Image, logo_img: Image.Image,
     out.alpha_composite(bg, (cx, cy))
     out.alpha_composite(logo, (cx + pad, cy + pad))
     return out.convert("RGB")
+
+def make_qr_physical(
+    data: str,
+    inches: float = 1.5,          # 1.5 pulgadas de lado
+    dpi: int = 300,               # 203 / 300 / 600, etc.
+    ecc: str = "Q",
+    color: str = "black",
+    border: int = 4,
+    logo_img: Image.Image | None = None,
+    logo_scale: float = 0.20      # 20% del lado del QR como máx.
+):
+    """
+    Genera un QR con tamaño físico controlado (inches × dpi).
+    No reescala módulos: calcula box_size entero y rellena con margen blanco
+    si hace falta para alcanzar el tamaño exacto en píxeles.
+    Devuelve (img, info_dict)
+    """
+    import qrcode.constants as C
+    ecc_map = {"L": C.ERROR_CORRECT_L, "M": C.ERROR_CORRECT_M,
+               "Q": C.ERROR_CORRECT_Q, "H": C.ERROR_CORRECT_H}
+
+    target_px = int(round(inches * dpi))  # píxeles objetivo
+    # 1ª pasada: descubrir cuántos módulos requiere el payload
+    qr_tmp = qrcode.QRCode(version=None, box_size=1, border=border,
+                           error_correction=ecc_map.get(ecc, C.ERROR_CORRECT_Q))
+    qr_tmp.add_data(data)
+    qr_tmp.make(fit=True)
+    modules = qr_tmp.modules_count            # módulos del símbolo (sin quiet zone)
+    total_modules = modules + 2 * border     # con quiet zone
+
+    # box_size entero que quepa en target_px
+    box_size = max(1, target_px // total_modules)
+    actual_px = total_modules * box_size
+
+    # 2ª pasada: generar con box_size definitivo
+    qr = qrcode.QRCode(version=None, box_size=box_size, border=border,
+                       error_correction=ecc_map.get(ecc, C.ERROR_CORRECT_Q))
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color=color, back_color="white").convert("RGB")
+
+    # Si quedó un poco más pequeño que target_px, rellenamos con blanco (sin reescalar módulos)
+    if actual_px < target_px:
+        pad = (target_px - actual_px) // 2
+        canvas = Image.new("RGB", (target_px, target_px), "white")
+        canvas.paste(img, (pad, pad))
+        img = canvas
+        actual_px = target_px  # ahora ya coincide
+
+    # Logo centrado (si hay)
+    if logo_img is not None:
+        img = center_logo(img, logo_img, scale=logo_scale)
+
+    # Métrica para diagnóstico
+    mm_per_pixel = 25.4 / dpi
+    module_size_mm = box_size * mm_per_pixel
+
+    info = {
+        "dpi": dpi,
+        "inches": inches,
+        "target_px": target_px,
+        "actual_px": actual_px,
+        "modules": modules,
+        "border_modules": border,
+        "box_size_px": box_size,
+        "module_size_mm": round(module_size_mm, 3),
+        "ecc": ecc,
+    }
+    return img, info
 
 def control_color(_):
     return "#00a859"
@@ -146,14 +208,19 @@ def read_table(uploaded_file):
 with st.expander("🧩 Generar QR individual", expanded=True):
     modo = st.radio("Contenido del QR", ["Texto legible", "JSON estructurado"], index=0, horizontal=True)
 
-    col_cfg = st.columns(3)
-    with col_cfg[0]:
-        qr_size = st.slider("Tamaño del QR (px)", 192, 1024, 384, 32)
-    with col_cfg[1]:
-        border = st.slider("Borde (quiet zone)", 2, 10, 4, 1)
-    with col_cfg[2]:
-        logo_scale = st.slider("Logo (% del lado)", 8, 30, 20, 1)
-    logo_file = st.file_uploader("Logo en el centro (opcional)", type=["png","jpg","jpeg","webp"])
+    col_size = st.columns(3)
+    with col_size[0]:
+        inches = st.number_input("Tamaño físico (pulgadas)", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
+    with col_size[1]:
+        dpi = st.selectbox("DPI de impresión", [203, 300, 600], index=1)
+    with col_size[2]:
+        border = st.slider("Borde (quiet zone) [módulos]", 2, 10, 4, 1)
+
+    col_logo = st.columns(2)
+    with col_logo[0]:
+        logo_scale = st.slider("Logo centrado (% del lado)", 8, 30, 20, 1)
+    with col_logo[1]:
+        logo_file = st.file_uploader("Logo (PNG/JPG/WebP)", type=["png","jpg","jpeg","webp"])
 
     # NUEVO cabezote (solo campos de entrada)
     col1, col2 = st.columns(2)
@@ -191,15 +258,30 @@ with st.expander("🧩 Generar QR individual", expanded=True):
         }
         payload = build_payload(row, modo)
         ecc_level = "H" if logo_file else "Q"
-        img = make_qr(payload, ecc=ecc_level, color=control_color(None),
-                      size=qr_size, border=border)
-        if logo_file:
-            img = center_logo(img, Image.open(logo_file), scale=logo_scale/100.0)
+        logo_img = Image.open(logo_file).convert("RGBA") if logo_file else None
 
-        st.image(img, caption=f"QR generado (ECC: {ecc_level})", use_container_width=True)
+        img, info = make_qr_physical(
+            data=payload,
+            inches=inches,
+            dpi=dpi,
+            ecc=ecc_level,
+            color=control_color(None),
+            border=border,
+            logo_img=logo_img,
+            logo_scale=logo_scale/100.0
+        )
 
-        # URL pública al PNG del QR
-        url_publica = public_qr_url(payload, size=qr_size, ecc=ecc_level)
+        st.image(img, caption=f"QR {inches}\" @ {dpi}dpi • ECC {ecc_level}", use_container_width=True)
+
+        # Diagnóstico de legibilidad
+        if info["module_size_mm"] < 0.33:
+            st.warning(f"El tamaño de módulo es {info['module_size_mm']} mm (< 0.33 mm). "
+                       "Para mejor lectura: reduce contenido, sube DPI o usa tamaño físico mayor.")
+        else:
+            st.info(f"Módulo ≈ {info['module_size_mm']} mm, módulos {info['modules']} + borde {border}")
+
+        # URL pública al PNG del QR (mismo tamaño en px)
+        url_publica = public_qr_url(payload, size=info["actual_px"], ecc=ecc_level)
         st.text_input("URL pública del QR", value=url_publica, help="Cópiala y ábrela en cualquier lugar.")
 
         # Descargar PNG
@@ -208,7 +290,7 @@ with st.expander("🧩 Generar QR individual", expanded=True):
                            file_name=f"qr_{nombre}_{lote}.png", mime="image/png")
 
 # ========== Plantilla de ejemplo (opcional) ==========
-st.divider(); st.subheader("📄 Plantilla de ejemplo (nuevo cabezote)")
+st.divider(); st.subheader("📄 Plantillas de ejemplo (nuevo cabezote)")
 if pd is not None:
     tpl_df = pd.DataFrame([{
         "timestamp": datetime.datetime.now().strftime("%d/%m/%Y %H:%M"),
@@ -232,20 +314,31 @@ if pd is not None:
     # CSV
     csv_buf = io.StringIO(newline="")
     tpl_df.to_csv(csv_buf, index=False)
-    col_tpl[0].download_button("⬇️ Descargar plantilla CSV", data=csv_buf.getvalue().encode("utf-8"),
+    col_tpl[0].download_button("⬇️ Plantilla CSV", data=csv_buf.getvalue().encode("utf-8"),
                                file_name="plantilla_medicamentos_qr_nuevo.csv", mime="text/csv")
     # XLSX
     xlsx_buf = io.BytesIO()
     with pd.ExcelWriter(xlsx_buf, engine="xlsxwriter") as writer:
         tpl_df.to_excel(writer, index=False, sheet_name="plantilla")
-    col_tpl[1].download_button("⬇️ Descargar plantilla XLSX", data=xlsx_buf.getvalue(),
+    col_tpl[1].download_button("⬇️ Plantilla XLSX", data=xlsx_buf.getvalue(),
                                file_name="plantilla_medicamentos_qr_nuevo.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ========== Lote (CSV/XLSX) — salida horizontal con el mismo orden de tu plantilla ==========
 st.divider(); st.subheader("📦 Generación masiva (CSV o XLSX)")
+
 uploaded = st.file_uploader("Sube la plantilla CSV/XLSX (usamos exactamente tu orden de columnas)", type=["csv","xlsx","xls"])
 modo_batch = st.radio("Contenido del QR (lote)", ["Texto legible", "JSON estructurado"], index=0, horizontal=True)
+
+# Parámetros físicos para el lote
+st.markdown("### Parámetros de impresión del lote")
+colp = st.columns(3)
+with colp[0]:
+    inches_batch = st.number_input("Tamaño físico (pulgadas) (lote)", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
+with colp[1]:
+    dpi_batch = st.selectbox("DPI (lote)", [203, 300, 600], index=1)
+with colp[2]:
+    border_batch = st.slider("Borde (quiet zone) (lote)", 2, 10, 4, 1)
 
 # Reutilizar logo del individual
 logo_img_batch = None
@@ -261,11 +354,9 @@ if uploaded is not None:
     st.dataframe(records[:10])
 
     # Determinar encabezado de salida: el MISMO orden de la plantilla
-    out_headers = list(input_headers)  # copia
-    # Si no está timestamp, lo insertamos al inicio
+    out_headers = list(input_headers)
     if "timestamp" not in out_headers:
         out_headers.insert(0, "timestamp")
-    # Asegurar url_qr y raw al final (en ese orden)
     for extra in ["url_qr", "raw"]:
         if extra in out_headers:
             out_headers.remove(extra)
@@ -293,17 +384,25 @@ if uploaded is not None:
                 base_row = {k: (r.get(k, "") or "") for k in HEAD_IN}
                 payload = build_payload(base_row, modo_batch)
                 ecc_for_batch = "H" if logo_img_batch else "Q"
-                url_publica = public_qr_url(payload, size=384, ecc=ecc_for_batch)
 
-                # PNG (con o sin logo)
-                img = make_qr(payload, ecc=ecc_for_batch, color=control_color(None),
-                              size=384, border=4)
-                if logo_img_batch:
-                    img = center_logo(img, logo_img_batch, scale=0.20)
+                img, info_qr = make_qr_physical(
+                    data=payload,
+                    inches=inches_batch,
+                    dpi=dpi_batch,
+                    ecc=ecc_for_batch,
+                    color=control_color(None),
+                    border=border_batch,
+                    logo_img=logo_img_batch,
+                    logo_scale=0.20
+                )
+
+                # PNG
                 png = io.BytesIO(); img.save(png, "PNG")
-
                 base_name = f"{i+1:03d}_{base_row.get('nombre_generico','med').strip().replace(' ','_')}_{base_row.get('lote','').strip()}"
                 z.writestr(base_name + ".png", png.getvalue())
+
+                # URL pública con el mismo tamaño en px
+                url_publica = public_qr_url(payload, size=info_qr["actual_px"], ecc=ecc_for_batch)
 
                 # Fila de salida: partimos de las columnas del usuario en su mismo orden
                 out = {k: (r.get(k, "") or "") for k in input_headers}
@@ -317,7 +416,6 @@ if uploaded is not None:
         w = csv.DictWriter(csv_out_buf, fieldnames=out_headers, delimiter=delim_used, quoting=csv.QUOTE_MINIMAL)
         w.writeheader()
         for row in out_rows:
-            # Asegurar todas las llaves presentes (vacías si faltan)
             w.writerow({k: row.get(k, "") for k in out_headers})
 
         # XLSX salida con el MISMO orden
@@ -341,3 +439,39 @@ if uploaded is not None:
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
             st.info("ℹ️ Para XLSX instala `pandas` y `xlsxwriter` en requirements.")
+'''
+
+with open(os.path.join(base_dir, "streamlit_app.py"), "w", encoding="utf-8") as f:
+    f.write(streamlit_app_py)
+
+# ---------------- requirements.txt ----------------
+requirements = """streamlit>=1.38,<2
+qrcode==7.4.2
+pillow>=10.4.0
+pandas>=2.2.2
+openpyxl>=3.1.5
+xlsxwriter>=3.2.0
+"""
+with open(os.path.join(base_dir, "requirements.txt"), "w", encoding="utf-8") as f:
+    f.write(requirements)
+
+# ---------------- README.md ----------------
+readme = f"""# QR Medicamentos — 1.5" listo para impresión
+
+App Streamlit para generar códigos QR de medicamentos cumpliendo campos del cabezote actualizado.
+Incluye:
+- Tamaño físico controlado (**1.5 pulgadas** por defecto) y selección de **DPI**.
+- Logo centrado opcional (ECC=H automáticamente si hay logo).
+- Carga **CSV (; o ,)** y **XLSX**, salida en el **mismo orden de columnas**.
+- Descarga de PNGs (lote), CSV/XLSX con `url_qr` y `raw`.
+- Enlaces públicos a la imagen del QR vía QuickChart.
+
+## Despliegue en Streamlit Cloud
+1. Sube esta carpeta como repositorio a GitHub.
+2. En Streamlit Cloud, crea una app apuntando a `streamlit_app.py`.
+3. Asegúrate de que este `requirements.txt` está en la raíz del repo.
+
+## Ejecución local
+```bash
+pip install -r requirements.txt
+streamlit run streamlit_app.py
